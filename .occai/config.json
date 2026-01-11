@@ -22,5 +22,6 @@
   "Py-time": 1,
   "Py-datetime": 1,
   "Py-warnings": 1,
-  "Py-data_loader_universal": 3
+  "Py-data_loader_universal": 3,
+  "Py-": 3
 }
