@@ -1,35 +1,32 @@
 """
-多视图半监督学习实验脚本
-- 20%测试集，80%训练集（二次划分：有标签/无标签）
-- 评估指标：Accuracy 和 F1 Score
-- 5个种子 [41,42,43,44,45]，计算平均值和标准差
-- unlabel比例：0.99, 0.95, 0.9, 0.85, 0.8
-- 支持CUDA加速
+MMatch 批量实验脚本
+- 数据集: data_new 文件夹中所有 .mat 文件
+- 划分: 80% 训练 / 20% 测试
+- 无标签比例: 0.99, 0.95, 0.9, 0.85, 0.8
+- 种子: 41, 42, 43, 44, 45
+- 指标: Accuracy, F1 (macro)
+- 输出: 平均值 ± 标准差
 """
-import os
-import random
-import statistics
-from datetime import datetime
 
-import numpy as np
-import scipy.io as sio
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from sklearn.metrics import f1_score
-from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingLR
+import numpy as np
+from sklearn.metrics import f1_score, accuracy_score
+import os
+from datetime import datetime
+import warnings
+warnings.filterwarnings('ignore')
 
-from data_loader import MultiViewDataset, SemiSupervisedDataLoader
+from data_loader_universal import create_dataloaders
 from multi_view_encoder import MultiViewEncoder
 
 
-# ==================== 配置参数 ====================
+# ==================== 配置 ====================
 SEEDS = [41, 42, 43, 44, 45]
-UNLABEL_RATIOS = [0.99, 0.95, 0.9, 0.85, 0.8]  # 无标签比例（训练集内）
-TEST_RATIO = 0.2  # 测试集比例
-
-DATA_DIR = 'data_new'
+UNLABEL_RATIOS = [0.99, 0.95, 0.9, 0.85, 0.8]
 DATASETS = [
     'Caltech101-20.mat',
     'Caltech-5V.mat',
@@ -38,13 +35,14 @@ DATASETS = [
     'Out_Scene.mat',
     'WebKB.mat',
 ]
+DATA_DIR = 'data_new'
 
 # 训练参数
 BATCH_SIZE = 32
-MU = 7  # 无标签/有标签批次比例
+MU = 7
 NUM_EPOCHS = 200
-LEARNING_RATE = 0.005
-PATIENCE = 40
+LEARNING_RATE = 0.001
+PATIENCE = 20
 
 # MMatch 参数
 LAMBDA_U = 1.0
@@ -53,146 +51,91 @@ TEMPERATURE = 0.5
 DA_MOMENTUM = 0.999
 
 
-# ==================== 数据加载器 ====================
-class GenericDatasetLoader:
-    """通用多视图数据集加载器，处理不同格式的.mat文件"""
-
-    def __init__(self, data_path: str, random_seed: int = 42):
-        self.data_path = data_path
-        self.random_seed = random_seed
-        self.dataset_name = os.path.basename(data_path).replace('.mat', '')
-
-        print(f"正在加载 {self.dataset_name}...")
-        mat_data = sio.loadmat(data_path)
-
-        # 提取标签（处理不同键名）
-        if 'Y' in mat_data:
-            self.Y = mat_data['Y'].flatten()
-        elif 'gt' in mat_data:
-            self.Y = mat_data['gt'].flatten()
-        elif 'gnd' in mat_data:
-            self.Y = mat_data['gnd'].flatten()
-        else:
-            raise ValueError(f"找不到标签数据，可用的键: {[k for k in mat_data.keys() if not k.startswith('_')]}")
-
-        num_samples = len(self.Y)
-
-        # 提取视图数据
-        if 'X' in mat_data:
-            X = mat_data['X']
-            if X.shape[0] == 1 and len(X.shape) == 2:
-                # X.shape = (1, num_views)
-                views_array = X[0]
-                self.num_views = len(views_array)
-                self.views_data = []
-                for i in range(self.num_views):
-                    view = views_array[i].astype(np.float32)
-                    # 检查是否需要转置
-                    if view.shape[0] != num_samples and view.shape[1] == num_samples:
-                        view = view.T
-                    self.views_data.append(view)
-            else:
-                # X每行是一个视图
-                self.num_views = X.shape[0]
-                self.views_data = []
-                for i in range(self.num_views):
-                    view = X[i][0].astype(np.float32)
-                    self.views_data.append(view)
-        else:
-            # X1, X2, X3, ... 格式
-            view_keys = sorted([k for k in mat_data.keys() if k.startswith('X') and k[1:].isdigit()])
-            self.num_views = len(view_keys)
-            self.views_data = []
-            for key in view_keys:
-                view = mat_data[key].astype(np.float32)
-                self.views_data.append(view)
-
-        # 验证维度
-        self.num_samples = self.views_data[0].shape[0]
-        for i, view in enumerate(self.views_data):
-            assert view.shape[0] == self.num_samples, \
-                f"视图{i}样本数{view.shape[0]}与预期{self.num_samples}不符"
-
-        self.num_classes = len(np.unique(self.Y))
-        self.view_dims = [view.shape[1] for view in self.views_data]
-
-        # 标签转为0-based
-        if self.Y.min() > 0:
-            self.Y = self.Y - self.Y.min()
-
-        print(f"  样本数: {self.num_samples}, 类别数: {self.num_classes}")
-        print(f"  视图数: {self.num_views}, 维度: {self.view_dims}")
-
-    def load_data(self, unlabel_ratio: float = 0.9, test_ratio: float = 0.2):
-        """
-        划分数据集
-        Args:
-            unlabel_ratio: 训练集中无标签数据的比例
-            test_ratio: 测试集比例
-        """
-        np.random.seed(self.random_seed)
-
-        indices = np.arange(self.num_samples)
-        np.random.shuffle(indices)
-
-        # 划分测试集和训练集
-        test_size = int(self.num_samples * test_ratio)
-        test_indices = indices[:test_size]
-        train_indices = indices[test_size:]
-
-        # 训练集中划分有标签和无标签
-        train_size = len(train_indices)
-        num_unlabeled = int(train_size * unlabel_ratio)
-        num_labeled = train_size - num_unlabeled
-
-        labeled_indices = train_indices[:num_labeled]
-        unlabeled_indices = train_indices[num_labeled:]
-
-        print(f"  数据划分: 有标签={len(labeled_indices)}, 无标签={len(unlabeled_indices)}, 测试={len(test_indices)}")
-
-        # 创建数据集
-        labeled_views = [view[labeled_indices] for view in self.views_data]
-        labeled_labels = self.Y[labeled_indices]
-        labeled_dataset = MultiViewDataset(labeled_views, labeled_labels, is_labeled=True)
-
-        unlabeled_views = [view[unlabeled_indices] for view in self.views_data]
-        unlabeled_labels = self.Y[unlabeled_indices]
-        unlabeled_dataset = MultiViewDataset(unlabeled_views, unlabeled_labels, is_labeled=False)
-
-        test_views = [view[test_indices] for view in self.views_data]
-        test_labels = self.Y[test_indices]
-        test_dataset = MultiViewDataset(test_views, test_labels, is_labeled=True)
-
-        return labeled_dataset, unlabeled_dataset, test_dataset
-
-
-# ==================== 训练模块 ====================
+# ==================== 分布对齐模块 ====================
 class DistributionAlignment:
-    """分布对齐模块"""
-    def __init__(self, num_classes, momentum=0.999, device='cpu'):
+    def __init__(self, num_classes, momentum=0.999):
         self.num_classes = num_classes
         self.momentum = momentum
-        self.device = device
-        self.q_tilde = (torch.ones(num_classes) / num_classes).to(device)
+        self.q_tilde = torch.ones(num_classes) / num_classes
 
     def update(self, probs):
         q_batch = probs.mean(dim=0)
-        self.q_tilde = self.momentum * self.q_tilde + (1 - self.momentum) * q_batch.detach()
+        self.q_tilde = self.momentum * self.q_tilde + (1 - self.momentum) * q_batch.detach().cpu()
 
     def align(self, probs):
-        q_tilde = torch.clamp(self.q_tilde, min=1e-6)
+        q_tilde = self.q_tilde.to(probs.device)
+        q_tilde = torch.clamp(q_tilde, min=1e-6)
         scaled = probs / q_tilde.unsqueeze(0)
-        return scaled / scaled.sum(dim=1, keepdim=True)
+        aligned_probs = scaled / scaled.sum(dim=1, keepdim=True)
+        return aligned_probs
 
 
-def sharpen(probs, T):
-    sharpened = probs ** (1 / T)
-    return sharpened / sharpened.sum(dim=1, keepdim=True)
+def sharpen(probs, T=0.5):
+    sharpened = probs ** (1.0 / T)
+    sharpened = sharpened / sharpened.sum(dim=1, keepdim=True)
+    return sharpened
 
 
-def train_epoch(model, train_loader, criterion, optimizer, device, da_module,
-                lambda_u=1.0, threshold=0.95, temperature=0.5):
-    """训练一个epoch"""
+# ==================== 置信度加权互教学伪标签生成 ====================
+def generate_view_pseudo_labels(view_probs_list, da_modules, temperature=0.5, threshold=0.95):
+    """
+    为每个视图生成伪标签（排除自己，用其他视图的置信度加权平均）
+    """
+    num_views = len(view_probs_list)
+    pseudo_targets_list = []
+    masks_list = []
+
+    # 计算各视图的置信度
+    confidences = []
+    for probs in view_probs_list:
+        conf, _ = torch.max(probs, dim=1)
+        confidences.append(conf)
+
+    # 为每个视图生成伪标签
+    for v in range(num_views):
+        other_probs = []
+        other_confs = []
+        for i in range(num_views):
+            if i != v:
+                other_probs.append(view_probs_list[i])
+                other_confs.append(confidences[i])
+
+        weights = torch.stack(other_confs, dim=0)
+        weights = weights / (weights.sum(dim=0, keepdim=True) + 1e-8)
+        probs_stack = torch.stack(other_probs, dim=0)
+        weighted_probs = (probs_stack * weights.unsqueeze(-1)).sum(dim=0)
+
+        da_modules[v].update(weighted_probs)
+        aligned_probs = da_modules[v].align(weighted_probs)
+        sharpened_probs = sharpen(aligned_probs, T=temperature)
+
+        max_probs, pseudo_targets = torch.max(sharpened_probs, dim=1)
+        mask = max_probs >= threshold
+
+        pseudo_targets_list.append(pseudo_targets)
+        masks_list.append(mask)
+
+    # 全局伪标签
+    weights = torch.stack(confidences, dim=0)
+    weights = weights / (weights.sum(dim=0, keepdim=True) + 1e-8)
+    probs_stack = torch.stack(view_probs_list, dim=0)
+    weighted_probs_global = (probs_stack * weights.unsqueeze(-1)).sum(dim=0)
+
+    da_modules[-1].update(weighted_probs_global)
+    aligned_probs_global = da_modules[-1].align(weighted_probs_global)
+    sharpened_probs_global = sharpen(aligned_probs_global, T=temperature)
+
+    max_probs_global, pseudo_targets_global = torch.max(sharpened_probs_global, dim=1)
+    mask_global = max_probs_global >= threshold
+
+    pseudo_targets_list.append(pseudo_targets_global)
+    masks_list.append(mask_global)
+
+    return pseudo_targets_list, masks_list
+
+
+# ==================== 训练函数 ====================
+def train_epoch(model, train_loader, criterion, optimizer, device, da_modules):
     model.train()
     total_loss = 0
     num_batches = 0
@@ -203,6 +146,8 @@ def train_epoch(model, train_loader, criterion, optimizer, device, da_module,
         unlabeled_views = [v.to(device) for v in batch['unlabeled']['views']]
 
         optimizer.zero_grad()
+
+        # 有标签数据前向传播
         labeled_outputs = model(labeled_views)
 
         # 监督损失
@@ -212,36 +157,42 @@ def train_epoch(model, train_loader, criterion, optimizer, device, da_module,
         if model.use_global_head:
             loss_x += criterion(labeled_outputs['global_logits'], labels).mean()
 
+        # 无标签数据前向传播（无梯度）
+        with torch.no_grad():
+            unlabeled_outputs = model(unlabeled_views)
+
+        # 生成伪标签
+        view_probs_list = [F.softmax(unlabeled_outputs['view_logits'][v], dim=1)
+                          for v in range(model.num_views)]
+        pseudo_targets_list, masks_list = generate_view_pseudo_labels(
+            view_probs_list, da_modules, TEMPERATURE, THRESHOLD
+        )
+
         # 无监督损失
         loss_u = 0
-        if model.use_global_head:
-            with torch.no_grad():
-                unlabeled_outputs = model(unlabeled_views)
-                unlabeled_probs = F.softmax(unlabeled_outputs['global_logits'], dim=1)
-                da_module.update(unlabeled_probs)
-                aligned_probs = da_module.align(unlabeled_probs)
-                pseudo_labels = sharpen(aligned_probs, T=temperature)
-                max_probs, pseudo_targets = torch.max(pseudo_labels, dim=1)
-                mask = max_probs >= threshold
+        any_mask = sum([m.sum().item() for m in masks_list]) > 0
 
-            if mask.sum() > 0:
-                unlabeled_outputs_train = model(unlabeled_views)
-                for v in range(model.num_views):
-                    loss_u += (criterion(unlabeled_outputs_train['view_logits'][v], pseudo_targets) * mask).mean()
-                loss_u += (criterion(unlabeled_outputs_train['global_logits'], pseudo_targets) * mask).mean()
+        if any_mask:
+            unlabeled_outputs_train = model(unlabeled_views)
+            for v in range(model.num_views):
+                if masks_list[v].sum() > 0:
+                    view_logits = unlabeled_outputs_train['view_logits'][v]
+                    loss_u += (criterion(view_logits, pseudo_targets_list[v]) * masks_list[v]).mean()
+            if model.use_global_head and masks_list[-1].sum() > 0:
+                global_logits = unlabeled_outputs_train['global_logits']
+                loss_u += (criterion(global_logits, pseudo_targets_list[-1]) * masks_list[-1]).mean()
 
-        loss = loss_x + lambda_u * loss_u
+        loss = loss_x + LAMBDA_U * loss_u
         loss.backward()
         optimizer.step()
 
         total_loss += loss.item()
         num_batches += 1
 
-    return total_loss / max(num_batches, 1)
+    return total_loss / num_batches if num_batches > 0 else 0
 
 
 def evaluate(model, test_loader, device):
-    """评估模型，返回准确率和F1"""
     model.eval()
     all_preds = []
     all_labels = []
@@ -249,75 +200,69 @@ def evaluate(model, test_loader, device):
     with torch.no_grad():
         for batch in test_loader:
             views = [v.to(device) for v in batch['views']]
-            labels = batch['label'].to(device)
-            outputs = model(views)
+            labels = batch['label']
 
+            outputs = model(views)
             if model.use_global_head:
                 preds = torch.argmax(outputs['global_logits'], dim=1)
             else:
-                # 融合多视图预测
-                logits_sum = sum(outputs['view_logits'])
-                preds = torch.argmax(logits_sum, dim=1)
+                # 使用视图投票
+                all_view_preds = [torch.argmax(outputs['view_logits'][v], dim=1)
+                                  for v in range(model.num_views)]
+                preds = torch.mode(torch.stack(all_view_preds), dim=0)[0]
 
             all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(labels.cpu().numpy())
+            all_labels.extend(labels.numpy())
 
     all_preds = np.array(all_preds)
     all_labels = np.array(all_labels)
 
-    acc = (all_preds == all_labels).mean() * 100
-    f1 = f1_score(all_labels, all_preds, average='macro') * 100
+    acc = accuracy_score(all_labels, all_preds)
+    f1 = f1_score(all_labels, all_preds, average='macro')
 
     return acc, f1
 
 
-def run_single_experiment(data_path, unlabel_ratio, seed, device):
+# ==================== 单次实验 ====================
+def run_single_experiment(mat_path, unlabel_ratio, seed, device):
     """运行单次实验"""
     # 设置随机种子
-    random.seed(seed)
-    np.random.seed(seed)
     torch.manual_seed(seed)
+    np.random.seed(seed)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
+        torch.cuda.manual_seed(seed)
 
     # 加载数据
-    dataset = GenericDatasetLoader(data_path, random_seed=seed)
-    labeled_ds, unlabeled_ds, test_ds = dataset.load_data(
+    train_loader, test_loader, info = create_dataloaders(
+        mat_path,
+        test_ratio=0.2,
         unlabel_ratio=unlabel_ratio,
-        test_ratio=TEST_RATIO
-    )
-
-    # 检查有标签数据是否足够
-    if len(labeled_ds) < BATCH_SIZE:
-        batch_size = max(1, len(labeled_ds) // 2)
-    else:
-        batch_size = BATCH_SIZE
-
-    # 创建数据加载器
-    train_loader = SemiSupervisedDataLoader(
-        labeled_dataset=labeled_ds,
-        unlabeled_dataset=unlabeled_ds,
-        batch_size=batch_size,
+        batch_size=BATCH_SIZE,
         mu=MU,
-        shuffle=True,
-        num_workers=0
+        random_seed=seed
     )
-    test_loader = DataLoader(test_ds, batch_size=batch_size*2, shuffle=False, num_workers=0)
 
     # 创建模型
     model = MultiViewEncoder(
-        num_views=dataset.num_views,
-        input_dims=dataset.view_dims,
+        num_views=info['num_views'],
+        input_dims=info['view_dims'],
         hidden_dims=[256, 128],
         encoding_dim=64,
-        num_classes=dataset.num_classes,
-        use_global_head=True
+        num_classes=info['num_classes'],
+        dropout=0.5,
+        use_batch_norm=True,
+        use_global_head=True,
+        global_hidden_dim=128
     ).to(device)
 
-    # 优化器和损失
+    # 创建分布对齐模块
+    da_modules = [DistributionAlignment(info['num_classes'], DA_MOMENTUM)
+                  for _ in range(info['num_views'] + 1)]
+
+    # 优化器
     criterion = nn.CrossEntropyLoss(reduction='none')
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    da_module = DistributionAlignment(dataset.num_classes, DA_MOMENTUM, device)
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+    scheduler = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
 
     # 训练
     best_acc = 0
@@ -325,11 +270,9 @@ def run_single_experiment(data_path, unlabel_ratio, seed, device):
     patience_counter = 0
 
     for epoch in range(1, NUM_EPOCHS + 1):
-        train_loss = train_epoch(
-            model, train_loader, criterion, optimizer, device, da_module,
-            LAMBDA_U, THRESHOLD, TEMPERATURE
-        )
+        train_loss = train_epoch(model, train_loader, criterion, optimizer, device, da_modules)
         acc, f1 = evaluate(model, test_loader, device)
+        scheduler.step()
 
         if acc > best_acc:
             best_acc = acc
@@ -337,117 +280,93 @@ def run_single_experiment(data_path, unlabel_ratio, seed, device):
             patience_counter = 0
         else:
             patience_counter += 1
-
-        if patience_counter >= PATIENCE:
-            break
+            if patience_counter >= PATIENCE:
+                break
 
     return best_acc, best_f1
 
 
-def run_all_experiments():
-    """运行所有实验"""
+# ==================== 主函数 ====================
+def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"使用设备: {device}")
-    print(f"种子列表: {SEEDS}")
-    print(f"无标签比例: {UNLABEL_RATIOS}")
+    print(f"Device: {device}")
+    print(f"Seeds: {SEEDS}")
+    print(f"Unlabel ratios: {UNLABEL_RATIOS}")
+    print(f"Datasets: {DATASETS}")
     print("=" * 80)
 
-    # 结果存储
+    # 结果保存
     results = {}
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    result_file = f"experiment_results_{timestamp}.txt"
 
-    for dataset_file in DATASETS:
-        data_path = os.path.join(DATA_DIR, dataset_file)
-        if not os.path.exists(data_path):
-            print(f"[跳过] 数据集不存在: {data_path}")
-            continue
+    with open(result_file, 'w', encoding='utf-8') as f:
+        f.write("MMatch Experiment Results\n")
+        f.write(f"Date: {timestamp}\n")
+        f.write(f"Device: {device}\n")
+        f.write("=" * 80 + "\n\n")
 
-        dataset_name = dataset_file.replace('.mat', '')
-        results[dataset_name] = {}
+    for dataset in DATASETS:
+        mat_path = os.path.join(DATA_DIR, dataset)
+        dataset_name = dataset.replace('.mat', '')
         print(f"\n{'='*80}")
-        print(f"数据集: {dataset_name}")
+        print(f"Dataset: {dataset_name}")
         print(f"{'='*80}")
 
-        for unlabel_ratio in UNLABEL_RATIOS:
-            labeled_ratio = 1 - unlabel_ratio
-            print(f"\n--- 有标签比例: {labeled_ratio*100:.0f}% (无标签: {unlabel_ratio*100:.0f}%) ---")
+        results[dataset_name] = {}
 
-            acc_list = []
-            f1_list = []
+        for unlabel_ratio in UNLABEL_RATIOS:
+            print(f"\n  Unlabel ratio: {unlabel_ratio}")
+            accs = []
+            f1s = []
 
             for seed in SEEDS:
-                print(f"  种子 {seed}: ", end="", flush=True)
+                print(f"    Seed {seed}...", end=" ", flush=True)
                 try:
-                    acc, f1 = run_single_experiment(data_path, unlabel_ratio, seed, device)
-                    acc_list.append(acc)
-                    f1_list.append(f1)
-                    print(f"Acc={acc:.2f}%, F1={f1:.2f}%")
+                    acc, f1 = run_single_experiment(mat_path, unlabel_ratio, seed, device)
+                    accs.append(acc)
+                    f1s.append(f1)
+                    print(f"ACC={acc:.4f}, F1={f1:.4f}")
                 except Exception as e:
-                    print(f"错误: {e}")
+                    print(f"Error: {e}")
                     continue
 
-            if len(acc_list) >= 2:
-                avg_acc = statistics.mean(acc_list)
-                std_acc = statistics.stdev(acc_list)
-                avg_f1 = statistics.mean(f1_list)
-                std_f1 = statistics.stdev(f1_list)
-            elif len(acc_list) == 1:
-                avg_acc, std_acc = acc_list[0], 0.0
-                avg_f1, std_f1 = f1_list[0], 0.0
-            else:
-                avg_acc, std_acc, avg_f1, std_f1 = 0, 0, 0, 0
+            if len(accs) > 0:
+                acc_mean = np.mean(accs)
+                acc_std = np.std(accs)
+                f1_mean = np.mean(f1s)
+                f1_std = np.std(f1s)
 
-            results[dataset_name][unlabel_ratio] = {
-                'acc': (avg_acc, std_acc),
-                'f1': (avg_f1, std_f1),
-                'raw_acc': acc_list,
-                'raw_f1': f1_list
-            }
+                results[dataset_name][unlabel_ratio] = {
+                    'acc_mean': acc_mean, 'acc_std': acc_std,
+                    'f1_mean': f1_mean, 'f1_std': f1_std
+                }
 
-            print(f"  >> 结果: Acc={avg_acc:.2f}±{std_acc:.2f}%, F1={avg_f1:.2f}±{std_f1:.2f}%")
+                print(f"\n  Results (unlabel={unlabel_ratio}):")
+                print(f"    ACC: {acc_mean:.4f} +/- {acc_std:.4f}")
+                print(f"    F1:  {f1_mean:.4f} +/- {f1_std:.4f}")
+
+                # 写入文件
+                with open(result_file, 'a', encoding='utf-8') as f:
+                    f.write(f"{dataset_name} | unlabel={unlabel_ratio}\n")
+                    f.write(f"  ACC: {acc_mean:.4f} +/- {acc_std:.4f}\n")
+                    f.write(f"  F1:  {f1_mean:.4f} +/- {f1_std:.4f}\n\n")
 
     # 打印汇总表格
     print("\n" + "=" * 80)
-    print("实验结果汇总")
+    print("SUMMARY TABLE")
     print("=" * 80)
+    print(f"{'Dataset':<25} | {'Unlabel':<8} | {'ACC':<20} | {'F1':<20}")
+    print("-" * 80)
 
-    for dataset_name, dataset_results in results.items():
-        print(f"\n{dataset_name}:")
-        print("-" * 60)
-        print(f"{'Unlabel%':<10} {'Acc (mean±std)':<20} {'F1 (mean±std)':<20}")
-        print("-" * 60)
-        for unlabel_ratio in UNLABEL_RATIOS:
-            if unlabel_ratio in dataset_results:
-                r = dataset_results[unlabel_ratio]
-                acc_str = f"{r['acc'][0]:.2f}±{r['acc'][1]:.2f}"
-                f1_str = f"{r['f1'][0]:.2f}±{r['f1'][1]:.2f}"
-                print(f"{unlabel_ratio*100:<10.0f} {acc_str:<20} {f1_str:<20}")
+    for dataset_name, ratios in results.items():
+        for ratio, metrics in ratios.items():
+            acc_str = f"{metrics['acc_mean']:.4f} +/- {metrics['acc_std']:.4f}"
+            f1_str = f"{metrics['f1_mean']:.4f} +/- {metrics['f1_std']:.4f}"
+            print(f"{dataset_name:<25} | {ratio:<8} | {acc_str:<20} | {f1_str:<20}")
 
-    # 保存结果到文件
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    result_file = f"experiment_results_{timestamp}.txt"
-    with open(result_file, 'w', encoding='utf-8') as f:
-        f.write("实验结果汇总\n")
-        f.write(f"时间: {timestamp}\n")
-        f.write(f"设备: {device}\n")
-        f.write(f"种子: {SEEDS}\n")
-        f.write(f"无标签比例: {UNLABEL_RATIOS}\n")
-        f.write("=" * 80 + "\n\n")
-
-        for dataset_name, dataset_results in results.items():
-            f.write(f"\n{dataset_name}:\n")
-            f.write("-" * 60 + "\n")
-            f.write(f"{'Unlabel%':<10} {'Acc (mean±std)':<20} {'F1 (mean±std)':<20}\n")
-            f.write("-" * 60 + "\n")
-            for unlabel_ratio in UNLABEL_RATIOS:
-                if unlabel_ratio in dataset_results:
-                    r = dataset_results[unlabel_ratio]
-                    acc_str = f"{r['acc'][0]:.2f}±{r['acc'][1]:.2f}"
-                    f1_str = f"{r['f1'][0]:.2f}±{r['f1'][1]:.2f}"
-                    f.write(f"{unlabel_ratio*100:<10.0f} {acc_str:<20} {f1_str:<20}\n")
-
-    print(f"\n结果已保存到: {result_file}")
-    return results
+    print(f"\nResults saved to: {result_file}")
 
 
-if __name__ == '__main__':
-    run_all_experiments()
+if __name__ == "__main__":
+    main()
