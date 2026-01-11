@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Experiments
+experiment_results_*.txt
+*.log
+
+# Models
+*.pth
+*.pt
+*.ckpt
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# Data (keep .mat files but ignore large datasets if needed)
+# data_new/
+
+# Misc
+*.pdf

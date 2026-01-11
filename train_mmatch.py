@@ -78,8 +78,7 @@ class DistributionAlignment:
 def compute_accuracy(logits, labels):
     """计算分类准确率"""
     preds = torch.argmax(logits, dim=1)
-    correct = (preds == labels).float().sum()
-    return correct / len(labels)
+    return (preds == labels).float().mean()
 
 
 def sharpen(probs, T=0.5):
@@ -118,65 +117,37 @@ def generate_view_pseudo_labels(view_probs_list, da_modules, temperature=0.5, th
     pseudo_targets_list = []
     masks_list = []
 
-    # 计算各视图的置信度 (用于加权)
-    confidences = []
-    for probs in view_probs_list:
-        conf, _ = torch.max(probs, dim=1)  # (batch_size,)
-        confidences.append(conf)
+    # 计算各视图的置信度
+    confidences = [probs.max(dim=1)[0] for probs in view_probs_list]
+
+    def process_pseudo_label(weighted_probs, da_module):
+        """处理加权概率，生成伪标签和掩码"""
+        da_module.update(weighted_probs)
+        aligned = da_module.align(weighted_probs)
+        sharpened = sharpen(aligned, T=temperature)
+        max_probs, targets = torch.max(sharpened, dim=1)
+        return targets, max_probs >= threshold
+
+    def weighted_average(probs_list, conf_list):
+        """计算置信度加权平均"""
+        weights = torch.stack(conf_list, dim=0)
+        weights = weights / (weights.sum(dim=0, keepdim=True) + 1e-8)
+        probs_stack = torch.stack(probs_list, dim=0)
+        return (probs_stack * weights.unsqueeze(-1)).sum(dim=0)
 
     # 为每个视图生成伪标签（排除自己，用其他视图的置信度加权平均）
     for v in range(num_views):
-        # 收集其他视图的预测和置信度
-        other_probs = []
-        other_confs = []
-        for i in range(num_views):
-            if i != v:  # 排除自己
-                other_probs.append(view_probs_list[i])
-                other_confs.append(confidences[i])
-
-        # 置信度加权平均
-        # weights: (num_other_views, batch_size)
-        weights = torch.stack(other_confs, dim=0)  # (V-1, batch_size)
-        weights = weights / (weights.sum(dim=0, keepdim=True) + 1e-8)  # 归一化
-
-        # probs_stack: (num_other_views, batch_size, num_classes)
-        probs_stack = torch.stack(other_probs, dim=0)
-
-        # 加权平均: (batch_size, num_classes)
-        weighted_probs = (probs_stack * weights.unsqueeze(-1)).sum(dim=0)
-
-        # 分布对齐
-        da_modules[v].update(weighted_probs)
-        aligned_probs = da_modules[v].align(weighted_probs)
-
-        # 锐化
-        sharpened_probs = sharpen(aligned_probs, T=temperature)
-
-        # 获取伪标签和置信度掩码
-        max_probs, pseudo_targets = torch.max(sharpened_probs, dim=1)
-        mask = max_probs >= threshold
-
-        pseudo_targets_list.append(pseudo_targets)
+        other_probs = [view_probs_list[i] for i in range(num_views) if i != v]
+        other_confs = [confidences[i] for i in range(num_views) if i != v]
+        weighted_probs = weighted_average(other_probs, other_confs)
+        targets, mask = process_pseudo_label(weighted_probs, da_modules[v])
+        pseudo_targets_list.append(targets)
         masks_list.append(mask)
 
-    # 为全局分类器生成伪标签（使用所有视图的置信度加权平均）
-    weights = torch.stack(confidences, dim=0)  # (V, batch_size)
-    weights = weights / (weights.sum(dim=0, keepdim=True) + 1e-8)
-    probs_stack = torch.stack(view_probs_list, dim=0)  # (V, batch_size, num_classes)
-    weighted_probs_global = (probs_stack * weights.unsqueeze(-1)).sum(dim=0)
-
-    # 分布对齐（最后一个DA模块是全局的）
-    da_modules[-1].update(weighted_probs_global)
-    aligned_probs_global = da_modules[-1].align(weighted_probs_global)
-
-    # 锐化
-    sharpened_probs_global = sharpen(aligned_probs_global, T=temperature)
-
-    # 获取伪标签和置信度掩码
-    max_probs_global, pseudo_targets_global = torch.max(sharpened_probs_global, dim=1)
-    mask_global = max_probs_global >= threshold
-
-    pseudo_targets_list.append(pseudo_targets_global)
+    # 为全局分类器生成伪标签（使用所有视图）
+    weighted_probs_global = weighted_average(view_probs_list, confidences)
+    targets_global, mask_global = process_pseudo_label(weighted_probs_global, da_modules[-1])
+    pseudo_targets_list.append(targets_global)
     masks_list.append(mask_global)
 
     return pseudo_targets_list, masks_list
@@ -245,11 +216,8 @@ def train_epoch_mmatch(model, train_loader, criterion, optimizer, device, epoch,
 
         # ========== 生成伪标签 (置信度加权互教学) ==========
         # 获取各视图的预测概率分布
-        view_probs_list = []
-        for v in range(model.num_views):
-            view_logits = unlabeled_outputs['view_logits'][v]
-            view_probs = F.softmax(view_logits, dim=1)
-            view_probs_list.append(view_probs)
+        view_probs_list = [F.softmax(unlabeled_outputs['view_logits'][v], dim=1)
+                           for v in range(model.num_views)]
 
         # 使用置信度加权互教学生成伪标签
         # pseudo_targets_list: [视图1伪标签, ..., 视图V伪标签, 全局伪标签]
@@ -259,14 +227,13 @@ def train_epoch_mmatch(model, train_loader, criterion, optimizer, device, epoch,
         )
 
         # 计算平均mask_ratio用于统计
-        mask_ratios = [mask.float().mean().item() for mask in masks_list]
-        mask_ratio = sum(mask_ratios) / len(mask_ratios)
+        mask_ratio = sum(mask.float().mean().item() for mask in masks_list) / len(masks_list)
 
         # ========== 计算无监督损失 L_u ==========
         loss_u = 0
 
         # 检查是否有任何视图有满足阈值的样本
-        any_mask = sum([mask.sum().item() for mask in masks_list]) > 0
+        any_mask = any(mask.sum().item() > 0 for mask in masks_list)
 
         if any_mask:
             # 对无标签数据重新进行前向传播（启用梯度）
@@ -461,17 +428,13 @@ def main():
 
     # 创建分布对齐模块列表（V个视图 + 1个全局 = V+1个）
     num_views = hw_dataset.num_views
-    da_modules = []
-    for v in range(num_views + 1):  # V个视图 + 1个全局
-        da = DistributionAlignment(
-            num_classes=hw_dataset.num_classes,
-            momentum=da_momentum
-        )
-        da_modules.append(da)
+    da_modules = [DistributionAlignment(num_classes=hw_dataset.num_classes, momentum=da_momentum)
+                  for _ in range(num_views + 1)]
     print(f"\n创建了 {len(da_modules)} 个分布对齐模块 ({num_views}个视图 + 1个全局)")
 
     # 损失函数和优化器
     criterion = nn.CrossEntropyLoss(reduction='none')  # 使用 reduction='none' 以支持掩码
+    eval_criterion = nn.CrossEntropyLoss()  # 评估时使用标准损失
     optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     scheduler = CosineAnnealingLR(optimizer, T_max=num_epochs)
 
@@ -492,8 +455,6 @@ def main():
         )
 
         # 评估
-        # 评估时使用标准的 CrossEntropyLoss
-        eval_criterion = nn.CrossEntropyLoss()
         test_loss, test_view_acc, test_global_acc = evaluate(
             model, test_loader, eval_criterion, device
         )
@@ -547,7 +508,6 @@ def main():
     checkpoint = torch.load('best_model_mmatch.pth')
     model.load_state_dict(checkpoint['model_state_dict'])
 
-    eval_criterion = nn.CrossEntropyLoss()
     final_loss, final_view_acc, final_global_acc = evaluate(
         model, test_loader, eval_criterion, device
     )
