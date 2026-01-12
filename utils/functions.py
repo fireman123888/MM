@@ -2,6 +2,66 @@
 工具函数
 """
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class LabelDrivenContrastiveLoss(nn.Module):
+    """
+    标签驱动对比损失
+    同一类别的样本在表示空间中接近，不同类别的样本远离
+    """
+
+    def __init__(self, temperature: float = 0.5):
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, features: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            features: 特征表示 [batch_size, feature_dim]
+            labels: 标签 [batch_size]
+
+        Returns:
+            对比损失
+        """
+        device = features.device
+        batch_size = features.size(0)
+
+        if batch_size <= 1:
+            return torch.tensor(0.0, device=device)
+
+        # 归一化特征
+        features = F.normalize(features, dim=1)
+
+        # 计算相似度矩阵
+        similarity = torch.mm(features, features.t()) / self.temperature
+
+        # 构建标签掩码：同类为正样本
+        labels = labels.view(-1, 1)
+        mask_pos = torch.eq(labels, labels.t()).float().to(device)
+
+        # 排除对角线（自身）
+        mask_self = torch.eye(batch_size, device=device)
+        mask_pos = mask_pos * (1 - mask_self)
+
+        # 检查是否有正样本对
+        pos_count = mask_pos.sum(dim=1)
+        if pos_count.sum() == 0:
+            return torch.tensor(0.0, device=device)
+
+        # 计算对比损失 (InfoNCE style)
+        exp_sim = torch.exp(similarity) * (1 - mask_self)
+        log_prob = similarity - torch.log(exp_sim.sum(dim=1, keepdim=True) + 1e-8)
+
+        # 只计算有正样本的损失
+        mean_log_prob = (mask_pos * log_prob).sum(dim=1) / (pos_count + 1e-8)
+        valid_mask = pos_count > 0
+        if valid_mask.sum() == 0:
+            return torch.tensor(0.0, device=device)
+
+        loss = -mean_log_prob[valid_mask].mean()
+        return loss
 
 
 def compute_accuracy(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
