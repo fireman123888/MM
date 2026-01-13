@@ -2,6 +2,80 @@
 工具函数
 """
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import List
+
+
+class CrossViewConsistencyLoss(nn.Module):
+    """
+    跨视图一致性约束损失
+    确保同一样本在不同视图中的表示保持一致
+    """
+
+    def __init__(self, loss_type: str = 'mse', temperature: float = 0.5):
+        """
+        Args:
+            loss_type: 损失类型 ('mse', 'cosine', 'contrastive')
+            temperature: 对比学习温度参数
+        """
+        super().__init__()
+        self.loss_type = loss_type
+        self.temperature = temperature
+
+    def forward(self, encodings: List[torch.Tensor]) -> torch.Tensor:
+        """
+        Args:
+            encodings: 各视图的编码列表，每个形状为 [batch_size, encoding_dim]
+
+        Returns:
+            一致性损失
+        """
+        num_views = len(encodings)
+        if num_views < 2:
+            return torch.tensor(0.0, device=encodings[0].device)
+
+        device = encodings[0].device
+        total_loss = torch.tensor(0.0, device=device)
+        num_pairs = 0
+
+        if self.loss_type == 'mse':
+            # MSE损失：最小化不同视图编码之间的均方误差
+            for i in range(num_views):
+                for j in range(i + 1, num_views):
+                    total_loss += F.mse_loss(encodings[i], encodings[j])
+                    num_pairs += 1
+
+        elif self.loss_type == 'cosine':
+            # 余弦相似度损失：最大化不同视图编码之间的余弦相似度
+            for i in range(num_views):
+                for j in range(i + 1, num_views):
+                    cos_sim = F.cosine_similarity(encodings[i], encodings[j], dim=1)
+                    total_loss += (1 - cos_sim).mean()
+                    num_pairs += 1
+
+        elif self.loss_type == 'contrastive':
+            # 对比学习损失：同一样本的不同视图作为正样本对
+            batch_size = encodings[0].size(0)
+
+            # 归一化所有编码
+            normalized = [F.normalize(enc, dim=1) for enc in encodings]
+
+            for i in range(num_views):
+                for j in range(i + 1, num_views):
+                    # 计算相似度矩阵
+                    sim_matrix = torch.mm(normalized[i], normalized[j].t()) / self.temperature
+
+                    # 正样本在对角线上
+                    labels = torch.arange(batch_size, device=device)
+
+                    # 双向对比损失
+                    loss_i = F.cross_entropy(sim_matrix, labels)
+                    loss_j = F.cross_entropy(sim_matrix.t(), labels)
+                    total_loss += (loss_i + loss_j) / 2
+                    num_pairs += 1
+
+        return total_loss / max(num_pairs, 1)
 
 
 def compute_accuracy(logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
