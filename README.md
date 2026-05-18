@@ -47,6 +47,7 @@ lawrag_qa/                 Core package
   retrieval.py             In-memory hybrid retrieval
   ingestion.py             Document loaders and JSONL persistence
   sessions.py              Multi-turn session memory
+  storage.py               SQLite runtime state persistence
   generator.py             LLM/rule-based answer generation
   verifier.py              Citation checks
 configs/                   Project configuration templates
@@ -70,9 +71,19 @@ The system only provides legal information based on retrieved materials and user
 - Claim-level verification
 - Sentence-level citation spans
 - Feedback API
-- In-memory review queue
+- SQLite-backed sessions, feedback, review queue, and QA logs
 - Red-team sample evaluation
 - FastAPI + no-build Web demo
+
+## Runtime State
+
+The app stores operational state in SQLite by default:
+
+```text
+LAWRAG_DB_PATH=data/lawrag_state.sqlite3
+```
+
+The database keeps multi-turn sessions, user feedback, human review items, and QA logs. Local SQLite files are ignored by Git.
 
 ## Current Branch
 

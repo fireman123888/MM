@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from threading import RLock
+from typing import Protocol
 from uuid import uuid4
 
 from .models import QueryFacts
@@ -20,9 +21,18 @@ class SessionState:
     updated_at: str = field(default_factory=lambda: now_iso())
 
 
+class SessionPersistence(Protocol):
+    def load_sessions(self) -> dict[str, SessionState]:
+        ...
+
+    def upsert_session(self, session: SessionState) -> None:
+        ...
+
+
 class SessionStore:
-    def __init__(self):
-        self._sessions: dict[str, SessionState] = {}
+    def __init__(self, persistence: SessionPersistence | None = None):
+        self._persistence = persistence
+        self._sessions: dict[str, SessionState] = persistence.load_sessions() if persistence else {}
         self._lock = RLock()
 
     def get_or_create(self, session_id: str | None = None) -> SessionState:
@@ -56,6 +66,8 @@ class SessionStore:
                 }
             )
             state.updated_at = now_iso()
+            if self._persistence:
+                self._persistence.upsert_session(state)
             return state
 
 

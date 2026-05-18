@@ -1,4 +1,6 @@
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from lawrag_qa.ingestion import document_from_dict
 from lawrag_qa.calculators import estimate_double_wage_gap
@@ -10,8 +12,13 @@ from lawrag_qa.splitter import split_documents
 
 class LawRagQaTests(unittest.TestCase):
     def setUp(self):
-        settings = Settings(use_llm=False, retrieval_top_k=4)
+        self.tmpdir = TemporaryDirectory()
+        self.db_path = str(Path(self.tmpdir.name) / "lawrag_state.sqlite3")
+        settings = Settings(use_llm=False, retrieval_top_k=4, db_path=self.db_path)
         self.pipeline = LawRagPipeline(sample_documents(), settings=settings)
+
+    def tearDown(self):
+        self.tmpdir.cleanup()
 
     def test_splitter_preserves_article_numbers(self):
         chunks = split_documents(sample_documents())
@@ -88,6 +95,46 @@ class LawRagQaTests(unittest.TestCase):
         self.assertTrue(any(item["review_id"] == review.review_id for item in items))
         resolved = self.pipeline.reviews.resolve(review.review_id, note="checked")
         self.assertEqual(resolved["status"], "resolved")
+
+    def test_sqlite_persists_operational_state(self):
+        query = "persisted unsigned contract query"
+        answer, _, verification, session, _ = self.pipeline.ask(query, session_id="persist-1")
+        self.assertIsNotNone(session)
+
+        review = self.pipeline.reviews.enqueue(
+            query=query,
+            answer_markdown=answer.to_markdown(),
+            verification={**verification, "risk_reasons": ["unit_test"]},
+            session_id="persist-1",
+        )
+        feedback = self.pipeline.reviews.add_feedback(
+            query=query,
+            issue_type="answer_issue",
+            comment="needs citation review",
+            rating=2,
+            session_id="persist-1",
+        )
+
+        reloaded = LawRagPipeline(
+            sample_documents(),
+            settings=Settings(use_llm=False, retrieval_top_k=4, db_path=self.db_path),
+        )
+        persisted_session = reloaded.sessions.get("persist-1")
+        self.assertIsNotNone(persisted_session)
+        self.assertEqual(persisted_session.session_id, "persist-1")
+        self.assertTrue(any(item["review_id"] == review.review_id for item in reloaded.reviews.list_reviews()))
+        self.assertTrue(any(item["feedback_id"] == feedback.feedback_id for item in reloaded.reviews.list_feedback()))
+        self.assertTrue(any(item["session_id"] == "persist-1" for item in reloaded.list_qa_logs()))
+
+        resolved = reloaded.reviews.resolve(review.review_id, note="checked")
+        self.assertEqual(resolved["status"], "resolved")
+
+        reloaded_again = LawRagPipeline(
+            sample_documents(),
+            settings=Settings(use_llm=False, retrieval_top_k=4, db_path=self.db_path),
+        )
+        resolved_reviews = [item for item in reloaded_again.reviews.list_reviews() if item["review_id"] == review.review_id]
+        self.assertEqual(resolved_reviews[0]["status"], "resolved")
 
 
 if __name__ == "__main__":

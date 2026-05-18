@@ -9,7 +9,7 @@ from .pipeline import LawRagPipeline
 
 def create_app(pipeline: LawRagPipeline | None = None):
     try:
-        from fastapi import FastAPI
+        from fastapi import FastAPI, Query
         from fastapi.responses import HTMLResponse
         from pydantic import BaseModel, Field
     except ImportError as exc:
@@ -157,6 +157,10 @@ def create_app(pipeline: LawRagPipeline | None = None):
     @app.get("/api/v1/feedback")
     def list_feedback():
         return {"status": "ok", "items": rag.reviews.list_feedback()}
+
+    @app.get("/api/v1/qa-logs")
+    def qa_logs(limit: int = Query(50, ge=1, le=200)):
+        return {"status": "ok", "items": rag.list_qa_logs(limit=limit)}
 
     @app.get("/api/v1/review-queue")
     def review_queue(status: str | None = None):

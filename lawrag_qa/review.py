@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from threading import RLock
+from typing import Protocol
 from uuid import uuid4
 
 from .sessions import now_iso
@@ -34,10 +35,25 @@ class FeedbackItem:
     created_at: str = field(default_factory=now_iso)
 
 
+class ReviewPersistence(Protocol):
+    def load_reviews(self) -> dict[str, ReviewItem]:
+        ...
+
+    def upsert_review(self, review: ReviewItem) -> None:
+        ...
+
+    def load_feedback(self) -> dict[str, FeedbackItem]:
+        ...
+
+    def upsert_feedback(self, feedback: FeedbackItem) -> None:
+        ...
+
+
 class ReviewStore:
-    def __init__(self):
-        self._reviews: dict[str, ReviewItem] = {}
-        self._feedback: dict[str, FeedbackItem] = {}
+    def __init__(self, persistence: ReviewPersistence | None = None):
+        self._persistence = persistence
+        self._reviews: dict[str, ReviewItem] = persistence.load_reviews() if persistence else {}
+        self._feedback: dict[str, FeedbackItem] = persistence.load_feedback() if persistence else {}
         self._lock = RLock()
 
     def enqueue(
@@ -58,6 +74,8 @@ class ReviewStore:
                 session_id=session_id,
             )
             self._reviews[review.review_id] = review
+            if self._persistence:
+                self._persistence.upsert_review(review)
             return review
 
     def list_reviews(self, status: str | None = None) -> list[dict[str, object]]:
@@ -75,6 +93,8 @@ class ReviewStore:
             review.status = "resolved"
             review.resolved_at = now_iso()
             review.resolution_note = note
+            if self._persistence:
+                self._persistence.upsert_review(review)
             return asdict(review)
 
     def add_feedback(
@@ -95,6 +115,8 @@ class ReviewStore:
                 session_id=session_id,
             )
             self._feedback[feedback.feedback_id] = feedback
+            if self._persistence:
+                self._persistence.upsert_feedback(feedback)
             return feedback
 
     def list_feedback(self) -> list[dict[str, object]]:

@@ -38,4 +38,6 @@ nul
 .env.*
 !.env.example
 data/lawrag_corpus.jsonl
+data/lawrag_state.sqlite3
+data/*.sqlite3
 outputs/

@@ -17,6 +17,7 @@
 - [ ] `POST /api/v1/search` 能召回第八十二条。
 - [ ] `POST /api/v1/documents/import` 可导入样例文档。
 - [ ] `POST /api/v1/feedback` 可记录用户反馈。
+- [ ] `GET /api/v1/qa-logs` 可查看最近问答日志。
 - [ ] `GET /api/v1/review-queue` 可查看复核队列。
 - [ ] `GET /` Web demo 可打开。
 
@@ -34,6 +35,13 @@
 - [ ] 不承诺诉讼结果。
 - [ ] 不编造法条、案例、法院或案号。
 - [ ] `verification.claim_checks` 和 `verification.citation_spans` 正常返回。
+
+## 运行态存储
+
+- [ ] `LAWRAG_DB_PATH` 指向本地 SQLite 文件。
+- [ ] 多轮 session 重启后仍可读取。
+- [ ] feedback、review queue、qa logs 重启后仍可读取。
+- [ ] `data/*.sqlite3` 未进入 Git。
 
 ## 回滚
 

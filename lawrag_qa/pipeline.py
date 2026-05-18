@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from threading import RLock
+from uuid import uuid4
 
 from .config import Settings, load_settings
 from .generator import AnswerGenerator
@@ -14,6 +16,7 @@ from .retrieval import InMemoryHybridRetriever
 from .review import ReviewItem, ReviewStore
 from .sessions import SessionState, SessionStore, merge_query_facts
 from .splitter import split_documents
+from .storage import SQLiteStore
 from .verifier import verify_answer
 
 
@@ -21,8 +24,9 @@ class LawRagPipeline:
     def __init__(self, documents: list[LegalDocument], settings: Settings | None = None):
         self.settings = settings or load_settings()
         self.documents = list(documents)
-        self.sessions = SessionStore()
-        self.reviews = ReviewStore()
+        self.storage = SQLiteStore(self.settings.db_path) if self.settings.db_path else None
+        self.sessions = SessionStore(persistence=self.storage)
+        self.reviews = ReviewStore(persistence=self.storage)
         self._lock = RLock()
         self._rebuild_index()
         llm_client = OpenAICompatibleClient(
@@ -86,15 +90,43 @@ class LawRagPipeline:
         answer = self.generator.generate(pack)
         verification = verify_answer(answer, pack)
         session = self.sessions.get(session_id) if session_id else None
+        answer_markdown = answer.to_markdown()
         review = None
         if verification.get("needs_review"):
             review = self.reviews.enqueue(
                 query=query,
-                answer_markdown=answer.to_markdown(),
+                answer_markdown=answer_markdown,
                 verification=verification,
                 session_id=session_id,
             )
+        self._record_qa_log(query, answer_markdown, answer, pack, verification, session_id=session_id)
         return answer, pack, verification, session, review
+
+    def list_qa_logs(self, limit: int = 50) -> list[dict[str, object]]:
+        if not self.storage:
+            return []
+        return self.storage.list_qa_logs(limit=limit)
+
+    def _record_qa_log(
+        self,
+        query: str,
+        answer_markdown: str,
+        answer: StructuredAnswer,
+        pack: EvidencePack,
+        verification: dict[str, object],
+        session_id: str | None = None,
+    ) -> None:
+        if not self.storage:
+            return
+        self.storage.insert_qa_log(
+            qa_id=f"qa_{uuid4().hex[:12]}",
+            query=query,
+            answer_markdown=answer_markdown,
+            facts=asdict(pack.facts),
+            citations=[asdict(citation) for citation in answer.citations],
+            verification=verification,
+            session_id=session_id,
+        )
 
     def _retrieval_query(self, query: str, facts: QueryFacts) -> str:
         context = " ".join([*facts.confirmed, *facts.inferred])

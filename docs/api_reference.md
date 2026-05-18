@@ -107,7 +107,33 @@ http://127.0.0.1:8011
 
 ## GET `/api/v1/feedback`
 
-查看当前内存中的反馈列表。
+查看已持久化的反馈列表。
+
+## GET `/api/v1/qa-logs`
+
+查看最近的问答日志。可选 query 参数：
+```text
+limit=50
+```
+
+响应：
+```json
+{
+  "status": "ok",
+  "items": [
+    {
+      "qa_id": "qa_xxx",
+      "session_id": "demo-session",
+      "query": "...",
+      "answer_markdown": "...",
+      "facts": {},
+      "citations": [],
+      "verification": {},
+      "created_at": "2026-05-18T00:00:00+00:00"
+    }
+  ]
+}
+```
 
 ## GET `/api/v1/review-queue`
 

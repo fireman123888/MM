@@ -21,3 +21,8 @@ corpus:
     - md
     - json
     - jsonl
+
+storage:
+  backend: sqlite
+  path_env: LAWRAG_DB_PATH
+  default_path: data/lawrag_state.sqlite3
