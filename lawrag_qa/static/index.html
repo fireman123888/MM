@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LawRAG-QA</title>
+  <style>
+    :root {
+      --ink: #1f2933;
+      --muted: #5b6673;
+      --line: #d8dee6;
+      --bg: #f6f8fa;
+      --panel: #ffffff;
+      --accent: #1c6b5b;
+      --accent-2: #b15c2f;
+      --soft: #eef7f4;
+      --warn: #fff4e6;
+      --danger: #b42318;
+      font-family: Inter, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+    }
+
+    header {
+      height: 56px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0;
+    }
+
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    main {
+      min-height: calc(100vh - 56px);
+      display: grid;
+      grid-template-columns: minmax(360px, 1.2fr) minmax(320px, 0.8fr);
+      gap: 0;
+    }
+
+    .workbench {
+      display: grid;
+      grid-template-rows: 1fr auto;
+      min-height: calc(100vh - 56px);
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .conversation {
+      padding: 20px;
+      overflow: auto;
+    }
+
+    .message {
+      max-width: 920px;
+      margin-bottom: 18px;
+      line-height: 1.65;
+      white-space: pre-wrap;
+    }
+
+    .message.user {
+      margin-left: auto;
+      padding: 12px 14px;
+      border: 1px solid #d5e7e2;
+      background: var(--soft);
+      border-radius: 8px;
+    }
+
+    .message.answer {
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .composer {
+      padding: 14px 20px 18px;
+      border-top: 1px solid var(--line);
+      background: #fbfcfd;
+    }
+
+    textarea,
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      color: var(--ink);
+      background: #fff;
+      font: inherit;
+      line-height: 1.5;
+      outline: none;
+    }
+
+    textarea:focus,
+    input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(28, 107, 91, 0.12);
+    }
+
+    .composer textarea {
+      min-height: 94px;
+      resize: vertical;
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 10px;
+    }
+
+    .toolbar input {
+      max-width: 280px;
+      height: 38px;
+      font-size: 13px;
+    }
+
+    button {
+      min-height: 38px;
+      border: 0;
+      border-radius: 8px;
+      padding: 0 14px;
+      color: #fff;
+      background: var(--accent);
+      font: inherit;
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      color: var(--accent);
+      background: var(--soft);
+      border: 1px solid #c6ddd7;
+    }
+
+    button.warning {
+      background: var(--accent-2);
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.62;
+    }
+
+    aside {
+      min-height: calc(100vh - 56px);
+      overflow: auto;
+      background: #fbfcfd;
+    }
+
+    .side-section {
+      padding: 18px 18px 20px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h2 {
+      margin: 0 0 12px;
+      font-size: 14px;
+      letter-spacing: 0;
+    }
+
+    .facts,
+    .sources,
+    .importer {
+      display: grid;
+      gap: 10px;
+    }
+
+    .tagline {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .tag {
+      padding: 4px 8px;
+      border-radius: 999px;
+      color: #27433d;
+      background: var(--soft);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .source {
+      padding: 10px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .source:first-child {
+      border-top: 0;
+    }
+
+    .source-title {
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.45;
+    }
+
+    .source-text {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .risk {
+      padding: 10px 12px;
+      border-left: 3px solid var(--accent-2);
+      background: var(--warn);
+      color: #65410f;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .error {
+      color: var(--danger);
+    }
+
+    @media (max-width: 900px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+      .workbench,
+      aside {
+        min-height: auto;
+      }
+      .workbench {
+        border-right: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>LawRAG-QA</h1>
+    <div class="status"><span class="dot"></span><span id="health">连接中</span></div>
+  </header>
+
+  <main>
+    <section class="workbench">
+      <div id="conversation" class="conversation">
+        <div class="message answer">请输入劳动法问题。</div>
+      </div>
+
+      <div class="composer">
+        <textarea id="query">我工作8个月没签劳动合同，月薪8000，可以赔多少？</textarea>
+        <div class="toolbar">
+          <input id="sessionId" placeholder="session id">
+          <div>
+            <button class="secondary" id="newSession">新会话</button>
+            <button id="ask">提问</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <aside>
+      <section class="side-section">
+        <h2>事实</h2>
+        <div id="facts" class="facts"></div>
+      </section>
+
+      <section class="side-section">
+        <h2>依据</h2>
+        <div id="sources" class="sources"></div>
+      </section>
+
+      <section class="side-section">
+        <h2>导入</h2>
+        <div class="importer">
+          <input id="docTitle" placeholder="文档标题">
+          <textarea id="docText" placeholder="粘贴法规、制度或合同条款"></textarea>
+          <button class="warning" id="importDoc">导入文档</button>
+          <div id="importResult" class="source-text"></div>
+        </div>
+      </section>
+    </aside>
+  </main>
+
+  <script>
+    const conversation = document.getElementById("conversation");
+    const facts = document.getElementById("facts");
+    const sources = document.getElementById("sources");
+    const query = document.getElementById("query");
+    const ask = document.getElementById("ask");
+    const sessionInput = document.getElementById("sessionId");
+    const health = document.getElementById("health");
+
+    async function api(path, payload) {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      return response.json();
+    }
+
+    function addMessage(text, type) {
+      const node = document.createElement("div");
+      node.className = `message ${type}`;
+      node.textContent = text;
+      conversation.appendChild(node);
+      conversation.scrollTop = conversation.scrollHeight;
+    }
+
+    function renderFacts(data) {
+      const groups = [
+        ["确认", data.confirmed || []],
+        ["缺失", data.missing || []],
+        ["推断", data.inferred || []],
+        ["风险", data.risk_flags || []],
+      ];
+      facts.innerHTML = groups.map(([label, items]) => `
+        <div>
+          <div class="source-title">${label}</div>
+          <div class="tagline">${items.length ? items.map(item => `<span class="tag">${escapeHtml(item)}</span>`).join("") : "<span class='source-text'>暂无</span>"}</div>
+        </div>
+      `).join("");
+    }
+
+    function renderSources(items) {
+      sources.innerHTML = items.length ? items.map(item => `
+        <div class="source">
+          <div class="source-title">[${escapeHtml(item.source_id)}] ${escapeHtml(item.doc_title)} ${escapeHtml(item.article_no)}</div>
+          <div class="source-text">${escapeHtml(item.text)}</div>
+        </div>
+      `).join("") : "<div class='risk'>暂无可展示依据。</div>";
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    ask.addEventListener("click", async () => {
+      const text = query.value.trim();
+      if (!text) return;
+      ask.disabled = true;
+      addMessage(text, "user");
+      try {
+        const data = await api("/api/v1/qa", {
+          query: text,
+          tenant_id: "public",
+          session_id: sessionInput.value.trim() || null,
+        });
+        if (data.session && data.session.session_id) sessionInput.value = data.session.session_id;
+        addMessage(data.answer, "answer");
+        renderFacts(data.facts || {});
+        renderSources(data.citations || []);
+      } catch (error) {
+        addMessage(`请求失败：${error.message}`, "answer error");
+      } finally {
+        ask.disabled = false;
+      }
+    });
+
+    document.getElementById("newSession").addEventListener("click", () => {
+      sessionInput.value = "";
+      conversation.innerHTML = "<div class='message answer'>请输入劳动法问题。</div>";
+      facts.innerHTML = "";
+      sources.innerHTML = "";
+    });
+
+    document.getElementById("importDoc").addEventListener("click", async () => {
+      const title = document.getElementById("docTitle").value.trim();
+      const text = document.getElementById("docText").value.trim();
+      const result = document.getElementById("importResult");
+      if (!title || !text) {
+        result.textContent = "标题和正文不能为空。";
+        return;
+      }
+      try {
+        const data = await api("/api/v1/documents/import", {
+          persist: true,
+          documents: [{ title, text, doc_type: "statute", metadata: { tenant_id: "public" } }],
+        });
+        result.textContent = `已导入 ${data.documents_added} 个文档，新增 ${data.chunks_added} 个片段。`;
+      } catch (error) {
+        result.textContent = `导入失败：${error.message}`;
+      }
+    });
+
+    fetch("/health")
+      .then(response => response.json())
+      .then(data => { health.textContent = `${data.documents} 文档 / ${data.chunks} 片段`; })
+      .catch(() => { health.textContent = "未连接"; });
+  </script>
+</body>
+</html>

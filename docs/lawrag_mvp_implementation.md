@@ -6,11 +6,15 @@
 
 - 法律法规条级切分：保留文档标题、条号、来源、效力状态和租户字段。
 - 本地混合检索：BM25 + 轻量字符/词项向量相似度 + RRF 融合。
+- 文档导入：支持 API payload，以及 `.txt`、`.md`、`.json`、`.jsonl` 文件/目录导入。
+- 持久化语料：可将导入文档写入 `LAWRAG_CORPUS_PATH` 指定的 JSONL 文件。
+- 多轮会话：支持 `session_id`，保留确认事实、推断主题、缺失事实和最近轮次。
 - 证据包：返回 `EvidencePack`，包含识别事实、缺失事实、风险标记和检索依据。
 - 结构化回答：结论、法律依据、适用分析、缺失事实、风险提示、免责声明。
 - 引用校验：检查引用编号是否存在，并对法律依据做轻量支持性检查。
 - 确定性计算器：对未签劳动合同二倍工资差额做演示级估算。
 - FastAPI 接口：`/health`、`/api/v1/search`、`/api/v1/qa`。
+- Web demo：访问 `/` 可进行问答、查看事实/依据、导入文档。
 
 ## LLM 接口
 
@@ -26,6 +30,7 @@ API key 不写入仓库，请在本地环境变量设置：
 $env:LAWRAG_LLM_BASE_URL = "http://127.0.0.1:49328/v1"
 $env:LAWRAG_LLM_API_KEY = "<your-api-key>"
 $env:LAWRAG_LLM_MODEL = "gpt-5.4-mini"
+$env:LAWRAG_CORPUS_PATH = "data/lawrag_corpus.jsonl"
 ```
 
 如果接口不可用，系统会降级为规则生成，方便本地测试和开发。
@@ -39,7 +44,13 @@ python -m lawrag_qa.cli "我工作8个月没签劳动合同，月薪8000，可�
 运行 API：
 
 ```powershell
-python -m uvicorn lawrag_qa.app:app --host 127.0.0.1 --port 8000
+python -m uvicorn lawrag_qa.app:app --host 127.0.0.1 --port 8011
+```
+
+Web demo：
+
+```text
+http://127.0.0.1:8011/
 ```
 
 测试：

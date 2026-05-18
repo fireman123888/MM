@@ -19,6 +19,7 @@ class Settings:
     llm_timeout_seconds: float = 30.0
     use_llm: bool = True
     retrieval_top_k: int = 6
+    corpus_path: str = "data/lawrag_corpus.jsonl"
 
 
 def load_settings() -> Settings:
@@ -39,6 +40,7 @@ def load_settings() -> Settings:
         llm_timeout_seconds=float(os.getenv("LAWRAG_LLM_TIMEOUT", "30")),
         use_llm=os.getenv("LAWRAG_USE_LLM", "1") not in {"0", "false", "False"},
         retrieval_top_k=int(os.getenv("LAWRAG_RETRIEVAL_TOP_K", "6")),
+        corpus_path=os.getenv("LAWRAG_CORPUS_PATH", "data/lawrag_corpus.jsonl"),
     )
 
 

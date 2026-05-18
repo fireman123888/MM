@@ -1,30 +1,55 @@
 """FastAPI app for the legal RAG MVP."""
 
+from pathlib import Path
+
+from .ingestion import document_from_dict
+from .models import LegalDocument
 from .pipeline import LawRagPipeline
 
 
 def create_app(pipeline: LawRagPipeline | None = None):
     try:
         from fastapi import FastAPI
+        from fastapi.responses import HTMLResponse
         from pydantic import BaseModel, Field
     except ImportError as exc:
         raise RuntimeError("FastAPI is not installed. Install fastapi and uvicorn to run the API.") from exc
 
     app = FastAPI(title="LawRAG-QA MVP", version="0.1.0")
-    rag = pipeline or LawRagPipeline.from_sample()
+    rag = pipeline or LawRagPipeline.from_sample_and_corpus()
 
     class QARequest(BaseModel):
         query: str = Field(..., min_length=1)
         tenant_id: str = "public"
+        session_id: str | None = None
 
     class SearchRequest(BaseModel):
         query: str = Field(..., min_length=1)
         top_k: int = 6
         tenant_id: str = "public"
 
+    class DocumentPayload(BaseModel):
+        doc_id: str | None = None
+        title: str
+        text: str
+        doc_type: str = "statute"
+        jurisdiction: str = "CN"
+        status: str = "effective"
+        source_url: str = ""
+        metadata: dict[str, object] = Field(default_factory=dict)
+
+    class ImportRequest(BaseModel):
+        documents: list[DocumentPayload]
+        persist: bool = True
+
+    @app.get("/", response_class=HTMLResponse)
+    def index():
+        html_path = Path(__file__).parent / "static" / "index.html"
+        return html_path.read_text(encoding="utf-8")
+
     @app.get("/health")
     def health():
-        return {"status": "ok", "chunks": len(rag.chunks)}
+        return {"status": "ok", "documents": len(rag.documents), "chunks": len(rag.chunks)}
 
     @app.post("/api/v1/search")
     def search(request: SearchRequest):
@@ -50,9 +75,14 @@ def create_app(pipeline: LawRagPipeline | None = None):
 
     @app.post("/api/v1/qa")
     def qa(request: QARequest):
-        answer, pack, verification = rag.ask(request.query, tenant_id=request.tenant_id)
+        answer, pack, verification, session = rag.ask(
+            request.query,
+            tenant_id=request.tenant_id,
+            session_id=request.session_id,
+        )
         return {
             "status": "ok" if verification["ok"] else "needs_review",
+            "session": serialize_session(session),
             "answer": answer.to_markdown(),
             "structured_answer": {
                 "conclusion": answer.conclusion,
@@ -85,7 +115,44 @@ def create_app(pipeline: LawRagPipeline | None = None):
             "verification": verification,
         }
 
+    @app.get("/api/v1/sessions/{session_id}")
+    def get_session(session_id: str):
+        session = rag.sessions.get(session_id)
+        if session is None:
+            return {"status": "not_found", "session": None}
+        return {"status": "ok", "session": serialize_session(session)}
+
+    @app.post("/api/v1/documents/import")
+    def import_documents(request: ImportRequest):
+        documents: list[LegalDocument] = [
+            document_from_dict(model_to_dict(payload)) for payload in request.documents
+        ]
+        summary = rag.add_documents(documents)
+        if request.persist:
+            rag.persist_documents()
+        return {"status": "ok", **summary}
+
     return app
 
 
 app = create_app()
+
+
+def serialize_session(session):
+    if session is None:
+        return None
+    return {
+        "session_id": session.session_id,
+        "confirmed_facts": session.confirmed_facts,
+        "inferred_topics": session.inferred_topics,
+        "missing_facts": session.missing_facts,
+        "turn_count": len(session.turns),
+        "turns": session.turns[-10:],
+        "updated_at": session.updated_at,
+    }
+
+
+def model_to_dict(model):
+    if hasattr(model, "model_dump"):
+        return model.model_dump()
+    return model.dict()
