@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/lawrag/answer.schema.json",
+  "title": "LawRAG Structured Answer",
+  "type": "object",
+  "required": [
+    "conclusion",
+    "legal_basis",
+    "analysis",
+    "missing_facts",
+    "risk_tips",
+    "citations",
+    "disclaimer",
+    "confidence",
+    "degraded"
+  ],
+  "properties": {
+    "conclusion": { "type": "string" },
+    "legal_basis": { "type": "array", "items": { "type": "string" } },
+    "analysis": { "type": "string" },
+    "missing_facts": { "type": "array", "items": { "type": "string" } },
+    "risk_tips": { "type": "array", "items": { "type": "string" } },
+    "citations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_id", "doc_title", "article_no", "text"],
+        "properties": {
+          "source_id": { "type": "string" },
+          "doc_title": { "type": "string" },
+          "article_no": { "type": "string" },
+          "text": { "type": "string" },
+          "source_url": { "type": "string" }
+        }
+      }
+    },
+    "disclaimer": { "type": "string" },
+    "confidence": { "oneOf": [{ "type": "string" }, { "type": "number" }] },
+    "degraded": { "type": "boolean" }
+  },
+  "additionalProperties": false
+}

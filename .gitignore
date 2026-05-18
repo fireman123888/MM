@@ -37,3 +37,5 @@ nul
 .env
 .env.*
 !.env.example
+data/lawrag_corpus.jsonl
+outputs/

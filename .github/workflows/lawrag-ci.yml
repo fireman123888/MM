@@ -1,0 +1,38 @@
+name: LawRAG CI
+
+on:
+  push:
+    branches:
+      - codex/legal-rag-mvp
+  pull_request:
+    paths:
+      - "lawrag_qa/**"
+      - "tests/**"
+      - "data/eval/**"
+      - "configs/**"
+      - "schemas/**"
+      - "docs/**"
+      - "requirements-lawrag.txt"
+      - "pyproject.toml"
+      - ".github/workflows/lawrag-ci.yml"
+
+jobs:
+  lawrag-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install API dependencies
+        run: python -m pip install -r requirements-lawrag.txt
+      - name: Unit tests
+        run: python -m unittest discover -s tests -p "test_lawrag_qa.py"
+      - name: Compile package
+        run: python -m compileall -q lawrag_qa
+      - name: Retrieval evaluation
+        run: python -m lawrag_qa.evaluation --cases data/eval/labor_qa_sample.jsonl --top-k 5
+      - name: Secret scan
+        run: |
+          pattern='agt''_codex_|LAWRAG''_LLM_API_KEY=.*''agt_|OPENAI''_API_KEY=.*''agt_'
+          ! grep -R -n -E "$pattern" .env.example docs lawrag_qa tests requirements-lawrag.txt configs schemas data/eval

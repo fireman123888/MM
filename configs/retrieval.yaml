@@ -1,0 +1,27 @@
+retrieval:
+  default_top_k: 6
+  tenant_filter_required: true
+  status_filter: effective
+  rank_fusion: reciprocal_rank_fusion
+  phrase_boosts:
+    unsigned_contract:
+      query_terms:
+        - 未签
+        - 没签
+        - 未订立
+      evidence_terms:
+        - 未与劳动者订立书面劳动合同
+        - 未同时订立书面劳动合同
+    double_wage:
+      query_terms:
+        - 赔
+        - 二倍工资
+        - 双倍工资
+      evidence_terms:
+        - 二倍的工资
+
+future:
+  embedding_model: BAAI/bge-m3
+  reranker_model: BAAI/bge-reranker-v2-m3
+  vector_store: pgvector_or_qdrant
+  keyword_store: elasticsearch_or_opensearch

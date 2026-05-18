@@ -1,0 +1,23 @@
+app:
+  name: LawRAG-QA
+  version: 0.2.0
+  default_tenant_id: public
+  disclaimer: 本系统仅提供基于检索材料的法律信息参考，不构成正式法律意见。
+
+llm:
+  provider: openai_compatible
+  base_url_env: LAWRAG_LLM_BASE_URL
+  api_key_env: LAWRAG_LLM_API_KEY
+  default_base_url: http://127.0.0.1:49328/v1
+  default_model: gpt-5.4-mini
+  timeout_seconds: 30
+  fallback_to_rule_based: true
+
+corpus:
+  path_env: LAWRAG_CORPUS_PATH
+  default_path: data/lawrag_corpus.jsonl
+  supported_formats:
+    - txt
+    - md
+    - json
+    - jsonl

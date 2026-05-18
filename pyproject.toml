@@ -1,0 +1,22 @@
+[project]
+name = "lawrag-qa"
+version = "0.2.0"
+description = "Chinese labor-law RAG MVP with verifiable citations"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+api = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.29"
+]
+
+[tool.setuptools]
+packages = ["lawrag_qa"]
+
+[tool.setuptools.package-data]
+lawrag_qa = ["static/*.html"]
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py"]
+testpaths = ["tests"]
