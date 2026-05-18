@@ -11,6 +11,7 @@ build/
 
 # Experiments
 experiment_results_*.txt
+autoresearch_runs/
 *.log
 
 # Models
@@ -33,3 +34,6 @@ nul
 
 # Misc
 *.pdf
+.env
+.env.*
+!.env.example
