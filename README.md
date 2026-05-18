@@ -61,6 +61,19 @@ scripts/                   Local quality gates
 
 The system only provides legal information based on retrieved materials and user-provided facts. It must not fabricate statutes, cases, case numbers, courts, or source links. High-risk, low-confidence, or insufficient-evidence questions should be answered conservatively or routed to human review in future versions.
 
+## Implemented MVP Capabilities
+
+- Article-level legal text splitting
+- In-memory hybrid retrieval
+- Multi-turn session memory
+- OpenAI-compatible LLM client with rule-based fallback
+- Claim-level verification
+- Sentence-level citation spans
+- Feedback API
+- In-memory review queue
+- Red-team sample evaluation
+- FastAPI + no-build Web demo
+
 ## Current Branch
 
 Active GitHub branch:

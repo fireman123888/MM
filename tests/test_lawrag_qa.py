@@ -26,13 +26,17 @@ class LawRagQaTests(unittest.TestCase):
         self.assertIn("第八十二条", found)
 
     def test_pipeline_returns_cited_answer(self):
-        answer, pack, verification, session = self.pipeline.ask("我工作8个月没签劳动合同，月薪8000，可以赔多少？")
+        answer, pack, verification, session, review = self.pipeline.ask("我工作8个月没签劳动合同，月薪8000，可以赔多少？")
         self.assertTrue(answer.citations)
         self.assertIn("第八十二条", [citation.article_no for citation in answer.citations])
         self.assertIn("劳动合同履行地或所在城市", answer.missing_facts)
         self.assertTrue(verification["ok"])
+        self.assertIn("claim_checks", verification)
+        self.assertIn("citation_spans", verification)
+        self.assertTrue(verification["citation_spans"])
         self.assertEqual(pack.facts.intent, "compensation_consultation")
         self.assertIsNone(session)
+        self.assertIsNone(review)
 
     def test_double_wage_calculator(self):
         estimate = estimate_double_wage_gap("工作8个月，月薪8000，没签劳动合同")
@@ -55,15 +59,35 @@ class LawRagQaTests(unittest.TestCase):
         self.assertTrue(any(item.chunk.title == "样例员工手册" for item in evidence))
 
     def test_session_tracks_multi_turn_facts(self):
-        _, _, _, session = self.pipeline.ask("我工作8个月没签劳动合同", session_id="case-1")
+        _, _, _, session, _ = self.pipeline.ask("我工作8个月没签劳动合同", session_id="case-1")
         self.assertIsNotNone(session)
         self.assertEqual(session.session_id, "case-1")
         self.assertIn("工作时长约 8 个月", session.confirmed_facts)
 
-        _, pack, _, session = self.pipeline.ask("月薪8000，能赔多少？", session_id="case-1")
+        _, pack, _, session, _ = self.pipeline.ask("月薪8000，能赔多少？", session_id="case-1")
         self.assertIsNotNone(session)
         self.assertIn("工作时长约 8 个月", pack.facts.confirmed)
         self.assertEqual(len(session.turns), 2)
+
+    def test_review_queue_captures_unsupported_answer(self):
+        answer, _, verification, _, _ = self.pipeline.ask("我工作8个月没签劳动合同", session_id="review-1")
+        verification = {
+            **verification,
+            "ok": False,
+            "needs_review": True,
+            "risk_reasons": ["unit_test"],
+        }
+        review = self.pipeline.reviews.enqueue(
+            query="我工作8个月没签劳动合同",
+            answer_markdown=answer.to_markdown(),
+            verification=verification,
+            session_id="review-1",
+        )
+        self.assertIsNotNone(review)
+        items = self.pipeline.reviews.list_reviews(status="open")
+        self.assertTrue(any(item["review_id"] == review.review_id for item in items))
+        resolved = self.pipeline.reviews.resolve(review.review_id, note="checked")
+        self.assertEqual(resolved["status"], "resolved")
 
 
 if __name__ == "__main__":

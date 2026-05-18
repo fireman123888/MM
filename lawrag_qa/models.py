@@ -72,6 +72,27 @@ class AnswerCitation:
 
 
 @dataclass(frozen=True)
+class CitationSpan:
+    source_id: str
+    claim_id: str
+    start_char: int
+    end_char: int
+    text: str
+    support_score: float
+
+
+@dataclass(frozen=True)
+class ClaimCheck:
+    claim_id: str
+    text: str
+    cited_source_ids: list[str]
+    supported: bool
+    support_score: float
+    support_spans: list[CitationSpan] = field(default_factory=list)
+    issue: str = ""
+
+
+@dataclass(frozen=True)
 class StructuredAnswer:
     conclusion: str
     legal_basis: list[str]

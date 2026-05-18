@@ -7,7 +7,7 @@ Write-Host "Compiling LawRAG package..."
 python -m compileall -q lawrag_qa
 
 Write-Host "Running sample retrieval evaluation..."
-python -m lawrag_qa.evaluation --cases data/eval/labor_qa_sample.jsonl --top-k 5
+python -m lawrag_qa.evaluation --cases data/eval/labor_qa_sample.jsonl --red-team-cases data/eval/red_team_sample.jsonl --top-k 5
 
 Write-Host "Scanning for local API keys in LawRAG files..."
 $secretPattern = ("agt" + "_codex_|" + "LAWRAG" + "_LLM_API_KEY=.*" + "agt_|" + "OPENAI" + "_API_KEY=.*" + "agt_")

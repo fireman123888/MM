@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/lawrag/verification.schema.json",
+  "title": "LawRAG Verification Report",
+  "type": "object",
+  "required": ["ok", "needs_review", "risk_reasons", "claim_checks", "citation_spans"],
+  "properties": {
+    "ok": { "type": "boolean" },
+    "needs_review": { "type": "boolean" },
+    "risk_reasons": { "type": "array", "items": { "type": "string" } },
+    "missing_citations": { "type": "array", "items": { "type": "string" } },
+    "unsupported_basis": { "type": "array", "items": { "type": "string" } },
+    "used_citations": { "type": "array", "items": { "type": "string" } },
+    "claim_checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["claim_id", "text", "cited_source_ids", "supported", "support_score"],
+        "properties": {
+          "claim_id": { "type": "string" },
+          "text": { "type": "string" },
+          "cited_source_ids": { "type": "array", "items": { "type": "string" } },
+          "supported": { "type": "boolean" },
+          "support_score": { "type": "number" },
+          "issue": { "type": "string" },
+          "support_spans": { "type": "array" }
+        }
+      }
+    },
+    "citation_spans": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source_id", "claim_id", "start_char", "end_char", "text", "support_score"],
+        "properties": {
+          "source_id": { "type": "string" },
+          "claim_id": { "type": "string" },
+          "start_char": { "type": "integer" },
+          "end_char": { "type": "integer" },
+          "text": { "type": "string" },
+          "support_score": { "type": "number" }
+        }
+      }
+    }
+  }
+}

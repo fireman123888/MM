@@ -11,6 +11,7 @@ from .llm_client import OpenAICompatibleClient
 from .models import EvidencePack, LegalDocument, QueryFacts, StructuredAnswer
 from .query import classify_query
 from .retrieval import InMemoryHybridRetriever
+from .review import ReviewItem, ReviewStore
 from .sessions import SessionState, SessionStore, merge_query_facts
 from .splitter import split_documents
 from .verifier import verify_answer
@@ -21,6 +22,7 @@ class LawRagPipeline:
         self.settings = settings or load_settings()
         self.documents = list(documents)
         self.sessions = SessionStore()
+        self.reviews = ReviewStore()
         self._lock = RLock()
         self._rebuild_index()
         llm_client = OpenAICompatibleClient(
@@ -79,12 +81,20 @@ class LawRagPipeline:
         query: str,
         tenant_id: str = "public",
         session_id: str | None = None,
-    ) -> tuple[StructuredAnswer, EvidencePack, dict[str, object], SessionState | None]:
+    ) -> tuple[StructuredAnswer, EvidencePack, dict[str, object], SessionState | None, ReviewItem | None]:
         pack = self.build_evidence_pack(query, tenant_id=tenant_id, session_id=session_id)
         answer = self.generator.generate(pack)
         verification = verify_answer(answer, pack)
         session = self.sessions.get(session_id) if session_id else None
-        return answer, pack, verification, session
+        review = None
+        if verification.get("needs_review"):
+            review = self.reviews.enqueue(
+                query=query,
+                answer_markdown=answer.to_markdown(),
+                verification=verification,
+                session_id=session_id,
+            )
+        return answer, pack, verification, session, review
 
     def _retrieval_query(self, query: str, facts: QueryFacts) -> str:
         context = " ".join([*facts.confirmed, *facts.inferred])

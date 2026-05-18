@@ -293,6 +293,18 @@
       </section>
 
       <section class="side-section">
+        <h2>复核与反馈</h2>
+        <div id="reviewBox" class="sources">
+          <div class="source-text">暂无需要复核的回答。</div>
+        </div>
+        <div class="toolbar">
+          <button class="secondary" id="markHelpful">有帮助</button>
+          <button class="warning" id="markIssue">有问题</button>
+        </div>
+        <div id="feedbackResult" class="source-text"></div>
+      </section>
+
+      <section class="side-section">
         <h2>导入</h2>
         <div class="importer">
           <input id="docTitle" placeholder="文档标题">
@@ -312,6 +324,7 @@
     const ask = document.getElementById("ask");
     const sessionInput = document.getElementById("sessionId");
     const health = document.getElementById("health");
+    let lastQuery = "";
 
     async function api(path, payload) {
       const response = await fetch(path, {
@@ -355,6 +368,21 @@
       `).join("") : "<div class='risk'>暂无可展示依据。</div>";
     }
 
+    function renderReview(review, verification) {
+      const box = document.getElementById("reviewBox");
+      if (!review) {
+        box.innerHTML = "<div class='source-text'>暂无需要复核的回答。</div>";
+        return;
+      }
+      const reasons = (verification && verification.risk_reasons || []).join("、") || "needs_review";
+      box.innerHTML = `
+        <div class="risk">
+          复核编号：${escapeHtml(review.review_id)}<br>
+          原因：${escapeHtml(reasons)}
+        </div>
+      `;
+    }
+
     function escapeHtml(value) {
       return String(value)
         .replaceAll("&", "&amp;")
@@ -368,6 +396,7 @@
       const text = query.value.trim();
       if (!text) return;
       ask.disabled = true;
+      lastQuery = text;
       addMessage(text, "user");
       try {
         const data = await api("/api/v1/qa", {
@@ -379,6 +408,7 @@
         addMessage(data.answer, "answer");
         renderFacts(data.facts || {});
         renderSources(data.citations || []);
+        renderReview(data.review, data.verification);
       } catch (error) {
         addMessage(`请求失败：${error.message}`, "answer error");
       } finally {
@@ -410,6 +440,34 @@
       } catch (error) {
         result.textContent = `导入失败：${error.message}`;
       }
+    });
+
+    async function sendFeedback(issueType, comment, rating) {
+      const result = document.getElementById("feedbackResult");
+      if (!lastQuery) {
+        result.textContent = "还没有可反馈的问题。";
+        return;
+      }
+      try {
+        const data = await api("/api/v1/feedback", {
+          query: lastQuery,
+          session_id: sessionInput.value.trim() || null,
+          issue_type: issueType,
+          comment,
+          rating,
+        });
+        result.textContent = `已记录反馈：${data.feedback.feedback_id}`;
+      } catch (error) {
+        result.textContent = `反馈失败：${error.message}`;
+      }
+    }
+
+    document.getElementById("markHelpful").addEventListener("click", () => {
+      sendFeedback("helpful", "用户标记有帮助", 5);
+    });
+
+    document.getElementById("markIssue").addEventListener("click", () => {
+      sendFeedback("answer_issue", "用户标记有问题", 1);
     });
 
     fetch("/health")

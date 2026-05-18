@@ -42,6 +42,16 @@ def create_app(pipeline: LawRagPipeline | None = None):
         documents: list[DocumentPayload]
         persist: bool = True
 
+    class FeedbackRequest(BaseModel):
+        query: str = Field(..., min_length=1)
+        issue_type: str = "general"
+        comment: str = ""
+        rating: int | None = None
+        session_id: str | None = None
+
+    class ResolveReviewRequest(BaseModel):
+        note: str = ""
+
     @app.get("/", response_class=HTMLResponse)
     def index():
         html_path = Path(__file__).parent / "static" / "index.html"
@@ -75,7 +85,7 @@ def create_app(pipeline: LawRagPipeline | None = None):
 
     @app.post("/api/v1/qa")
     def qa(request: QARequest):
-        answer, pack, verification, session = rag.ask(
+        answer, pack, verification, session, review = rag.ask(
             request.query,
             tenant_id=request.tenant_id,
             session_id=request.session_id,
@@ -83,6 +93,7 @@ def create_app(pipeline: LawRagPipeline | None = None):
         return {
             "status": "ok" if verification["ok"] else "needs_review",
             "session": serialize_session(session),
+            "review": serialize_review(review),
             "answer": answer.to_markdown(),
             "structured_answer": {
                 "conclusion": answer.conclusion,
@@ -132,6 +143,32 @@ def create_app(pipeline: LawRagPipeline | None = None):
             rag.persist_documents()
         return {"status": "ok", **summary}
 
+    @app.post("/api/v1/feedback")
+    def feedback(request: FeedbackRequest):
+        item = rag.reviews.add_feedback(
+            query=request.query,
+            issue_type=request.issue_type,
+            comment=request.comment,
+            rating=request.rating,
+            session_id=request.session_id,
+        )
+        return {"status": "ok", "feedback": item.__dict__}
+
+    @app.get("/api/v1/feedback")
+    def list_feedback():
+        return {"status": "ok", "items": rag.reviews.list_feedback()}
+
+    @app.get("/api/v1/review-queue")
+    def review_queue(status: str | None = None):
+        return {"status": "ok", "items": rag.reviews.list_reviews(status=status)}
+
+    @app.post("/api/v1/review-queue/{review_id}/resolve")
+    def resolve_review(review_id: str, request: ResolveReviewRequest):
+        item = rag.reviews.resolve(review_id, note=request.note)
+        if item is None:
+            return {"status": "not_found", "review": None}
+        return {"status": "ok", "review": item}
+
     return app
 
 
@@ -149,6 +186,17 @@ def serialize_session(session):
         "turn_count": len(session.turns),
         "turns": session.turns[-10:],
         "updated_at": session.updated_at,
+    }
+
+
+def serialize_review(review):
+    if review is None:
+        return None
+    return {
+        "review_id": review.review_id,
+        "status": review.status,
+        "risk_reasons": review.risk_reasons,
+        "created_at": review.created_at,
     }
 
 

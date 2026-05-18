@@ -16,6 +16,12 @@
 python -m lawrag_qa.evaluation --cases data/eval/labor_qa_sample.jsonl --top-k 5
 ```
 
+带红队样例：
+
+```powershell
+python -m lawrag_qa.evaluation --cases data/eval/labor_qa_sample.jsonl --red-team-cases data/eval/red_team_sample.jsonl --top-k 5
+```
+
 ## 评测集分层
 
 | 层级 | 目标 | 当前状态 |
@@ -29,10 +35,10 @@ python -m lawrag_qa.evaluation --cases data/eval/labor_qa_sample.jsonl --top-k 5
 ## 下一阶段指标
 
 - `Citation Support Rate`
-- `Unsupported Claim Rate`
+- `Unsupported Claim Rate`（已在 API verification 中输出 claim-level 检查结果）
 - `Context Carryover Accuracy`
 - `Risk Flag Recall`
-- `Red Team Refusal Precision`
+- `Red Team Refusal Precision`（已提供样例红队评测入口）
 
 ## 评测门槛
 

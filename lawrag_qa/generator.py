@@ -112,12 +112,13 @@ conclusion, legal_basis(list), analysis, missing_facts(list), risk_tips(list), c
         ]
         calculation = estimate_double_wage_gap(pack.query)
         conclusion = "根据已检索到的劳动法律材料，可以先作一般性判断："
+        primary_citation = f" [{citations[0].source_id}]" if citations else ""
         if any("未签书面劳动合同" in item for item in pack.facts.inferred):
-            conclusion += "如果确实存在劳动关系且用人单位超过一个月未订立书面劳动合同，通常可能涉及二倍工资差额责任。"
+            conclusion += f"如果确实存在劳动关系且用人单位超过一个月未订立书面劳动合同，通常可能涉及二倍工资差额责任。{primary_citation}"
         elif any("解除" in item or "经济补偿" in item for item in pack.facts.inferred):
-            conclusion += "解除或终止劳动合同是否需要补偿，需要结合解除原因、工作年限和证据判断。"
+            conclusion += f"解除或终止劳动合同是否需要补偿，需要结合解除原因、工作年限和证据判断。{primary_citation}"
         else:
-            conclusion += "请结合下列法律依据和事实补充进一步判断。"
+            conclusion += f"请结合下列法律依据和事实补充进一步判断。{primary_citation}"
 
         analysis_parts = []
         if calculation:

@@ -17,7 +17,7 @@ def main() -> None:
     pipeline = LawRagPipeline.from_sample()
     if args.corpus:
         pipeline.add_documents_from_path(args.corpus)
-    answer, pack, verification, session = pipeline.ask(args.query, session_id=args.session_id)
+    answer, pack, verification, session, review = pipeline.ask(args.query, session_id=args.session_id)
 
     print(answer.to_markdown())
     print("\n---")
@@ -27,6 +27,8 @@ def main() -> None:
     print(f"校验：{verification}")
     if session:
         print(f"会话：{session.session_id} turns={len(session.turns)}")
+    if review:
+        print(f"复核：{review.review_id} status={review.status}")
 
 
 if __name__ == "__main__":
